@@ -1,4 +1,4 @@
-# USGS Community for Data Integration (CDI) Data Pipeline
+# Building an Analysis-Ready Data Resource Using a Multi-Stage Pipeline
 ## Project Information
 - **Author**: Grace Donovan
 - **Course**: MSDS 696 - Data Science Practicum II
