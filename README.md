@@ -48,9 +48,9 @@ msds-696/
 └── README.md
 ```
 ## Database Entity–Relationship Diagram
-![Entity relationship diagram of database](msds696/figures/database_tables.png)
+![Entity relationship diagram of database](figures/database_tables.png)
 
-## Pipeline Workflow Diagram
+## Project Pipeline Workflow Diagram
 ![Project pipeline workflow](figures/flowchart.png)
 
 
