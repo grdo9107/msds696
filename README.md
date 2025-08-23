@@ -1,4 +1,4 @@
-# Building an Analysis-Ready Data Resource Using a Multi-Stage Pipeline
+# USGS Community for Data Integration (CDI) Data Pipeline
 ## Project Information
 - **Author**: Grace Donovan
 - **Course**: MSDS 696 - Data Science Practicum II
@@ -48,10 +48,10 @@ msds-696/
 └── README.md
 ```
 ## Database Entity–Relationship Diagram
-![er](figures/cdi_rfp_tables_er _ Mermaid Chart-2025-08-20-191524.png)
+![Entity relationship diagram of database](msds696/figures/database_tables.png)
 
 ## Pipeline Workflow Diagram
-![flowchart](figures/flowchart.png)
+![Project pipeline workflow](figures/flowchart.png)
 
 
 ## Installation
@@ -69,6 +69,7 @@ msds-696/
    pip install -r requirements.txt
    ```
 3. **Ensure Google Chrome is installed** (for Selenium-based crawlers)
+4. **Access credentials for a PostgreSQL user with permission** (to create database and insert data into tables)
 
 ## Usage
 
@@ -95,17 +96,17 @@ The pipeline consists of three components that should be run in sequence:
 - Clean and normalize descriptions
 - Assign 12 character unique IDs to each unique project
 - Extract top-5 keywords using KeyBERT from descriptions
-- Bulk upsert project records into Postgres projects table
+- Bulk upsert project records into Postgres `projects` table
 - **Input:** `1_retrieval/data/projects.csv`
 - **Output:** `projects table`
 
 #### 2.2 Extract Project Personnel from Descriptions
 **Script:** `b_extract_personnel_from_description.py`
 - Read raw scraped project data 
-- Extract project personnel data from descriptions into lists using regex patterns
-- Merge extracted lists into a single team string per project
-- Explode single team string per project into one name per row
-- Label first name for each project as "lead_pi" and the rest as "collab" 
+- Extract personnel data from descriptions into lists using regex patterns
+- Merge extracted lists into a single string with project team entries
+- Explode single string with team entries per project into one entry per row
+- Label the first name listed for each project as "lead_pi" and the rest as "collab" 
 - Clean up name strings to remove “PhD,” “Former Employee,” punctuation, and extra spaces
 - Write resulting project_id, name, role table to CSV
 - **Input:** `1_retrieval/data/projects.csv`
@@ -115,21 +116,21 @@ The pipeline consists of three components that should be run in sequence:
 **Script:** `c_contacts_cleanup.py`
 - Read raw scraped contacts data 
 - Label each person per project_id as lead_pi (first) or collab (subsequent) via group-wise indexing
-- Clean up name entries
+- Clean name entries using `clean_name_column` script in `b_extract_personnel_from_description.py` 
 - Write resulting project_id, name, title, organization, email, role to CSV
 - **Input:** `1_retrieval/data/contacts.csv`
 - **Output:** `data/contacts.csv`
 
 #### 2.3 Consolidate Contact and Personnel Data
 **Script:** `d_conslidate_personnel.ipynb`
-- Read contacts and personnel data
-- Fuzzy-match names within and across both sets to identify duplicates and near-matches
-- Apply manual name fixes within individual sets
-- Filter out exact matches and dump cross set alias map to JSON
-- Manually correct names in JSON cross dump
-- Reload JSON, use refined alias map to replaces names in both sets with corrected variants
-- Outer-merge sets and cleanup merged dataframe values
-- Write resulting project_id, name, title, organization, email, role to CSV
+- Read contacts and personnel data as dataframes
+- Fuzzy-match names within and across dataframes (within_project_contacts, within_cleaned_contacts, and cross) to identify duplicates and near-matches
+- Apply manual name fixes within individual dataframes
+- Filter out exact matches and dump the cross dataframe to JSON
+- Manually correct names in JSON cross data
+- Reload JSON, use refined alias map to replace names in both sets with corrected variants
+- Outer-merge the refined contacts and personnel dataframe and cleanup merged dataframe values
+- Write resulting merge dataframe (project_id, name, title, organization, email, role) to CSV
 - **Input:** `data/contacts.csv` and `data/personnel.csv`
 - **Intermediate Output:** `data/cross_names.json`
 - **Output:** `data/enhanced_personnel.csv`
@@ -137,11 +138,10 @@ The pipeline consists of three components that should be run in sequence:
 #### 2.4 Personnel Processing and Table Creation
 **Script:** `e_personnel_role_table_creation.py`
 - Read consolidated personnel data as a dataframe
-- Assign each unique name a 12-character UUID as name_id
-- Select one “representative” row per person (record with the most non-null title/organization/email)
-- Filter dataframe by “representative” row per person
-- Bulk upsert unique personnel data (name_id, name, title, organization, email) to personnel table
-- Bulk upsert project–person–role mappings (project_id, name_id, role) to role table
+- Assign each unique name a 12-character unique ID (name_id)
+- Filter dataframe by “representative” row per person using `select_representative_rows` script to identify one “representative” row per person (record with the most non-null title/organization/email information)
+- Bulk upsert unique personnel data (name_id, name, title, organization, email) to `personnel` table
+- Bulk upsert project–person–role mappings (project_id, name_id, role) to `role` table
 - **Input:** `data/enhanced_personnel.csv`
 - **Output:** `personnel table` and `role table`
 
@@ -151,26 +151,26 @@ The pipeline consists of three components that should be run in sequence:
 
 #### 3.1 Retrieve Personnel ORCIDs via ORCID API
 **Script:** `a_add_orcids.py`
-- Read personnel table into a dataframe
-- Call ORCID API for each name
-- Verify middle names/initials to select best ORCID match
-- Apply fuzzy-match threshold to drop low-confidence ORCIDs
+- Read `personnel` table into a dataframe
+- Call ORCID API and iterate through each name in dataframe
+- Verify middle names/initials to select the best ORCID matches
+- Apply fuzzy-match function and drop low-confidence ORCIDs using threshol
 - Alter personnel table to add an orcid column 
-- Bulk-update each personnel table to add retrieved ORCID if available
+- Bulk-update each `personnel` table with retrieved ORCID (if available)
 - **Input:** `personnel table`
 - **Output:** `personnel table`
 
 #### 3.2 Retrieve Known Publications from CDI Website
 **Script:** `b_retrieve_pubs_known.py`
-- Scrape publication information table from CDI publication webpages
-- Extract structured sections (title, year, doi, and authors)
+- Scrape publication content from CDI publication webpages
+- Extract structured publication sections (title, year, doi, and authors)
 - Write extracted data to CSV
 - **Output:** `data/known_pubs_reports.csv`
 
 #### 3.3 Retrieve CDI Publications from xDD API
 **Script:** `c_retrieve_pubs_xdd.py`
-- Call xDD snippets API with term/document filters
-- Parse JSON response and skip any snippet with ≤ 2 hits
+- Call xDD API with CDI term filter
+- Parse JSON response and exclude snippets with ≤ 2 hits
 - Build records containing title, year, DOI, authors, highlight, and hits
 - Dedupe records by DOI (or title if DOI is missing)
 - Write unique records to CSV
@@ -178,79 +178,79 @@ The pipeline consists of three components that should be run in sequence:
 
 #### 3.4 Consolidate Known and xDD Retrieved Publications
 **Script:** `d_compare_consolidate_pubs.py`
-- Read known publications data and xDD publications data as dataframes
+- Read known CDI webpage publication data and xDD publication data as dataframes
 - Parse and normalize xDD dataframe fields
 - Outer-join dataframes on DOI and reorder columns
-- Clean titles and authors entries
+- Clean title and author entries
 - Filter out annual/project/community facilitator reports using regex patterns in titles
-- Write merged dataframe to CSV 
-- Write filtered dataframe to CSV
+- Write merged dataframe to CSV (includes annual/project/community facilitator reports)
+- Write filtered dataframe to CSV (doesn't include annual/project/community facilitator reports)
 - **Input:** `data/known_pubs_reports.csv` and `data/xdd_pubs_reports.csv`
 - **Output:** `data/merged_pubs.csv` and `data/merged_pubs_filtered.csv`
 
 #### 3.5 Matched Projects and Publications Analysis and Table Creation 
 **Script and File:** `e_project_publication_match_functions.py` and `e_project_publication_match_analysis.ipynb`
-- Load and join projects, role, and personnel tables via SQL into a dataframe
-- Clean and align project and publication data
+- Load and join `projects`, `role`, and `personnel` tables into a dataframe (project)
+- Read the merged/filtered publication data as a dataframe (publication)
+- Clean and align the project and publication data
 - Assign unique 12 character IDs to publications
-- Compute weighted fuzzy-match score based on lead‐PI presence, author name similarity, keyword hits in the title, and year proximity
+- Compute weighted fuzzy-match score between project and publication dataframes based on lead‐PI presence, author name similarity, keyword hits from the projects in the publication titles, and year proximity
 - Calculate summary statistics for weighted fuzzy-match scores
-- Subset matches by high confidence matches (match_score >= 0.6) and save as CSV
-- Manually check high confidence matches CSV, remove any matches that don't make sense
-- Reload cleaned high confidence matches CSV as dataframe
-- Subset dataframe by outputs (publication data) and related project/publication pairs
-- Create outputs and related tables in database
-- Bulk upsert outputs data to outputs table (output_id, title, doi, release_year)
-- Bulk upsert related data to related table (output_id and project_id)
+- Subset matches using high confidence threshold (match_score >= 0.6) and save as CSV
+- Manually check high confidence matches CSV, remove any matches that don't make sense (publication/project matches where the publication is not clearly an output from the project)
+- Reload refined high confidence matches CSV as dataframe
+- Subset dataframe by publications and related project/publication matches
+- Create `outputs` and `related` tables
+- Bulk upsert outputs data to `outputs` table (output_id, title, doi, release_year)
+- Bulk upsert `related` data to related table (output_id and project_id)
 - **Input:** `data/merged_pubs_filtered.csv`, `projects table`, `role table`, `personnel table`, 
 - **Intermediate Output:** `data/high_confidence_proj_pub_matches.csv`
 - **Output:** `outputs table` and `related table`
 
 ## Key Features
 
-### Web Scraping and Data Extraction
-- **Multi-source Data**: Combines ORCID API and xDD API with web scraping for comprehensive data collection
-- **Structured Content Extraction**: Automatically identifies and extracts key sections (title, description, contacts, etc.)
-- **Error Handling**: Logs failed attempts and continues processing
-- **Selenium Integration**: Uses Chrome WebDriver for dynamic content extraction
+### Multi-source Data Extraction and Web Scraping 
+- **Multi-source Data**: Combines ORCID API and xDD API with web scraping for comprehensive data collection.
+- **Structured Content Extraction**: Automatically identifies and extracts key sections (title, description, contacts, etc.) from CDI project and publication webpages.
+- **Error Handling**: Logs scraped webpages in sitemap and pickle file in case scraping is interrupted. If interrupted and scraper needs to be reran, it starts from that last webpage it left off on.
 
-### Identity and Provenance
-- **UUID Assignment**: Generates unique 12-character identifiers for distinct entities, ensuring reliable joins and deduplication.
+### Data Standardization and Identifier Assignment
+- **Unique Identifier Assignment**: Generates unique 12-character identifiers for distinct entities, ensuring reliable joins and deduplication.
 - **Column Renaming**: Renames author and metadata columns to generic field names (person, pub_authors) for uniform downstream processing.
 
-### Project/Publication Match Filtering, Scoring, and Reporting
-- **Year-Window Filtering**: Selects publications within a tolerance window around each project’s start year to focus on relevant outputs.
-- **Fuzzy Author Matching**: Applies rapid fuzz token_sort_ratio with lead-PI enforcement to quantify author overlap and ensure key contributors are present as publication authors.
+### Project and Publication Matching, Filtering, Scoring, and Reporting
+- **Year-Window Filtering**: Selects publications within a tolerance window around each project’s start year to focus on relevant project outputs.
+- **Fuzzy Author Matching**: Applies rapid fuzz token_sort_ratio with lead-PI enforcement (lead PIs name must be included in the publication author list) to quantify author overlap between projects and publications.
 - **Keyword-in-Title Matching**: Uses rapid fuzz partial_ratio to score the presence of project keywords in publication titles.
-- **Statistical Summarization**: Calculates mean, median, mode, minimum, and maximum of match scores for quick performance insights.
-- **Weighted Scoring Engine**: Combines normalized year proximity, author similarity, and keyword hits into a single match score with adjustable weights and thresholds.
+- **Statistical Summarization**: Calculates mean, median, mode, minimum, and maximum of match scores for performance insights.
+- **Weighted Scoring Engine**: Combines normalized year proximity, author similarity, and keyword hits into a single match score for each project/publication match with adjustable weights and thresholds to compile high confidence matches.
    
-### SQL-Based Table Creation, Data Upsert, and Data Ingest
-- **Automated Outputs Table Creation**: Creates tables in Postgres database, ensuring reproducible persistence of results.
-- **PostgreSQL Integration**: Uses psycopg2 with context-managed cursors for efficient querying and joins across tables.
+### SQL-Based Table Creation, Data Ingest and Upsert
+- **Automated Table Creation**: Creates tables in Postgres database.
+- **PostgreSQL Integration**: Uses `psycopg2` Python module with context-managed cursors for efficient querying and joins across tables.
 
 ## Configuration
 
 ### Data Retrieval Settings
-- **Web Scraping**: Selenium Chrome WebDriver set to avoid rate limit errors using page load delays and human like waits (3-7 seconds between page visits).
-- **xDD API**: Search term “community for data integration”, minimum publication date set to 2009-01, filter by presence of “USGS”, result limit set to 1000 snippets
-- **ORCID API**: Search by given‐names (first) and family‐name (last), set max results per query to 4, and set rate limit to 1 second pause between calls.
+- **Web Scraping**: Selenium Chrome WebDriver set to avoid rate limit errors using page load delays and "human like" waits (3-7 seconds between page visits).
+- **xDD API**: Search term “community for data integration”, minimum publication date set to 2013-01, filter by presence of “USGS”, result limit set to 1000 snippets.
+- **ORCID API**: Search by given‐name (first) and family‐name (last), set max results per query to 5, and set rate limit to 1 second pause between calls.
 
 ### Data Cleaning and Extraction
-- **Project Descriptions**: Truncate at firs instances of “Principal” in description and collapse all newlines to single spaces then trim.
-- **Keyword Extraction**: KeyBERT (all-MiniLM-L6-v2) for identify top 5 unigram keywords from descriptions
-- **Personnel Parsing**: Regex to identify "Principal Investigator", "Co-Investigator(s)", "Cooperator/Partner" instances in descriptions. Clean name labels used to remove “PhD”, “Contractor”, “Former Employee”, stray punctuation.
+- **Project Descriptions**: Truncate at first instances of “Principal” in description and collapse all newlines to single spaces, then trim.
+- **Keyword Extraction**: KeyBERT model (all-MiniLM-L6-v2) for identify top 5 single keywords from descriptions
+- **Personnel Parsing**: Regex to identify "Principal Investigator", "Co-Investigator(s)", "Cooperator/Partner" instances in descriptions. Remove non-essential titles or labels (i.e., “PhD”, “Contractor”, “Former Employee”)from names along with stray punctuation.
 
 ### Matching and Scoring
-- **Year Window**: Publications released >=4 years around each project’s start.
-- **Author Matching**: Fuzzy match threshold set to 70% (token_sort_ratio) and enforced presence of the lead PI name in the publication author list.
-- **Keyword Matching**: Fuzzy match threshold for project keywords in publication titles set to 70% (partial_ratio)
-- **Score Weights**: Year proximity weight set to 0.4, author overlap weight set to 0.2, and keyword hits weight set to 0.4.
+- **Year Window**: Publications published up to 4 years after each project’s start.
+- **Author Matching**: Fuzzy match threshold set to 87% (token_sort_ratio) and enforced presence of the lead PI name in the publication author list.
+- **Keyword Matching**: Fuzzy match threshold for project keywords in publication titles set to 75% (partial_ratio)
+- **Score Weights**: Year proximity weight set to 0.4, author overlap weight set to 0.2, and keyword hits weight set to 0.4 to standardize scores.
 
 ### Database Connection
-- **Environment Variable**: DATABASE_DSN in .env
-- **Auto-Created Tables**: Outputs and related tables creation
-- **Upsert Method**: Bulk inserts/updates via psycopg2’s execute_values
+- **Environment Variable**: DATABASE_DSN in .env.
+- **Auto-Created Tables**: `outputs` and `related` tables creation (`personnel`, `projects`, and `role` tables created in database using SQL).
+- **Upsert Method**: Bulk load, join, insert, and upsert of tables and data using psycopg2’s execute_values.
 
 ## Output Files
 | File Path | Description | Component |
@@ -279,15 +279,10 @@ The pipeline consists of three components that should be run in sequence:
 | `related` | Relationships between projects and publication outputs (project_id, output_id) | Data Enhancement
 
 ## Limitations
-
-### Technical Limitations
-1. **Web Scraping Fragility**: Changes to the CDI website’s HTML structure or anti-bot defenses can break the Selenium crawler and lead to data gaps.
-2. **API Coverage and Accuracy**: ORCID and xDD API responses vary in completeness and may return low-confidence or missing matches, impacting enrichment quality.
-3. **Heuristic Matching Errors**: Fuzzy-matching thresholds for personnel names and publication keywords can produce false positives or overlook valid links, requiring manual review.
-4. **Processing Environment Dependencies**: Requires a compatible Chrome WebDriver, stable internet access, and PostgreSQL.
-
-### Scope Limitations
-1. **Temporal Scope**: Limited to projects and outputs available on the CDI website from 2013 onward because the CDI website only includes 2013+ project information. However, the annual request for proposals effort began in 2009 so older project data is not included.
-2. **Public Data Availability**: Relies exclusively on publicly accessible records where internal reports and restricted data are not captured.
-3. **Schema Constraints**: Fixed PostgreSQL schema may not accommodate future data types without refactoring.
-
+1. **Fragile Web Scraping**: Changes to the CDI website’s HTML structure can break the Selenium crawler.
+2. **Missing or incomplete data from webpages**: Project webpages prior to 2013 are missing from the CDI website, database excludes data for projects from 2009, 2010, 2011, and 2012.
+3. **API Coverage**: The ORCID and xDD databases do not include comprehensive data for all project personnel and related publications. For the ORCID database, some project personnel likely don't have registered ORCIDs, or they've registered their ORCIDs under names (names they want to be referred to as) that don’t match the official listings on the CDI project webpages (given name that's associated with USGS active directory). xDD is not a comprehensive corpus of all published works. Project personnel may not have acknowledged the CDI in their publications or have cited the CDI in various ways, making it difficult to identify related publications using search terms and combinations or search term like "CDI", "Community for Data Integration", "USGS".
+4. **Heuristic Matching Errors**: Fuzzy-matching thresholds for personnel names and publication keywords can produce false positives or overlook valid links, requiring manual review. The single match score with weighted fuzzy-match similarity scores and time window score for each project/publication match maybe not be the best way to identify high confidence project/publication matches.
+5. **Processing Environment Dependencies**: Requires a compatible Chrome WebDriver, stable internet access, and PostgreSQL. 
+6. **Public Data Availability**: Relies exclusively on publicly accessible records where internal reports and tracking data are not captured.
+7. **Schema Constraints**: Fixed PostgreSQL schema may not accommodate the addition of new data with varying data types in the future without refactoring.
